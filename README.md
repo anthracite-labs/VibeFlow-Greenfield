@@ -19,10 +19,12 @@ Do not use historical evidence as current project status. `CHECKPOINT.md` is the
 
 Active/reviewable mission: **M-015**. This single pointer is retained because repository integrity validation requires the human-facing README to name the mission selected by the authoritative DAG. Current implementation/validation state belongs in `CHECKPOINT.md`, not here.
 
+The current authoritative active/reviewable mission is **M-016**. This pointer exists because retained integrity validation requires human-facing entry points to name the mission selected by the DAG; do not infer broader status or acceptance from this README.
 Update this pointer only in the same change that advances the authoritative mission state and checkpoint.
 
 ## Stack
 
+Update the M-016 pointer in this README only in the same mission-progression change that updates the authoritative DAG. If a historical document or evidence file disagrees with current mission authority, the Master Build System and mission DAG win.
 - Node.js 24
 - pnpm 11.4.0
 - TypeScript 6
