@@ -23,6 +23,7 @@ import {
   CrossProjectArtifactRelationError,
   isArtifactTypeToken,
   isUuid,
+  NotFoundError,
   type ArtifactRelationKind,
   type ArtifactRelationRow,
   type ArtifactRepository,
@@ -170,8 +171,11 @@ export class ArtifactService {
 
     try {
       return await this.options.artifacts.getArtifactById(artifactId);
-    } catch {
-      throw new ArtifactNotFoundError(`Artifact not found: ${artifactId}`);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new ArtifactNotFoundError(`Artifact not found: ${artifactId}`);
+      }
+      throw error;
     }
   }
 
@@ -245,14 +249,18 @@ export class ArtifactService {
     await this.authorizeEndpointRead(accountId, objectArtifactId);
 
     // 4. Only now load canonical rows (both already authorized to exist and be
-    // readable; a missing row here still fails closed).
+    // readable; a missing row here still fails closed). Infrastructure errors
+    // propagate rather than being mislabeled as a missing endpoint.
     let subject: ArtifactRow;
     let object: ArtifactRow;
     try {
       subject = await this.options.artifacts.getArtifactById(subjectArtifactId);
       object = await this.options.artifacts.getArtifactById(objectArtifactId);
-    } catch {
-      throw new ArtifactNotFoundError("Artifact relation endpoint not found");
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new ArtifactNotFoundError("Artifact relation endpoint not found");
+      }
+      throw error;
     }
 
     // 5 & 6. Derive canonical project ids and require the same Project.
@@ -349,8 +357,11 @@ export class ArtifactService {
 
     try {
       return await this.options.artifacts.getArtifactRelationById(relationId);
-    } catch {
-      throw new ArtifactNotFoundError(`Artifact relation not found: ${relationId}`);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new ArtifactNotFoundError(`Artifact relation not found: ${relationId}`);
+      }
+      throw error;
     }
   }
 

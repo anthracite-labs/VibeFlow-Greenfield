@@ -1,8 +1,7 @@
 version: '1.0'
 read_first:
   - AGENTS.md
-  - .ai/ACTIVE_MISSION.md
-  - master-build-system/00_MASTER/MASTER_OF_MASTERS.md
+  - CHECKPOINT.md
 authorities:
   product: master-build-system/01_PRODUCT/PRODUCT_MASTER.md
   frontend: master-build-system/07_FRONTEND/FRONTEND_MASTER.md
@@ -20,4 +19,4 @@ machine_readable:
   implementation_references: master-build-system/04_AI_AGENT/IMPLEMENTATION_REFERENCE_POLICY.yaml
   missions: master-build-system/10_IMPLEMENTATION/MISSION_DAG.yaml
   acceptance: master-build-system/11_VERIFICATION/V1_ACCEPTANCE.yaml
-context_rule: Load only files referenced by the current mission plus relevant invariants.
+context_rule: Read AGENTS.md and CHECKPOINT.md first; then load only authority/evidence relevant to the current task.

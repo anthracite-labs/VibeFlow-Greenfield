@@ -16,6 +16,7 @@
 import {
   DuplicateIdempotentCommandError,
   isUuid,
+  NotFoundError,
   type ArtifactRelationRow,
   type ArtifactRow,
   type ProjectClonePlanRow,
@@ -200,12 +201,16 @@ export class ProjectCloneService {
       );
     }
 
-    // 3. Only now load the canonical source Project.
+    // 3. Only now load the canonical source Project. A real persistence outage
+    // is not equivalent to an unknown Project and must remain observable.
     let sourceProject: ProjectRow;
     try {
       sourceProject = await this.options.projects.getProjectById(sourceProjectId);
-    } catch {
-      throw new ProjectNotFoundError(`Project not found: ${sourceProjectId}`);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new ProjectNotFoundError(`Project not found: ${sourceProjectId}`);
+      }
+      throw error;
     }
 
     // 4. Derive the Organization from canonical persistence, never a claim.
@@ -277,7 +282,7 @@ export class ProjectCloneService {
    *
    * Authorization is against the canonical target Project. Unknown and
    * unauthorized plan ids produce the same opaque error, so this cannot be
-   * used to probe which plans exist.
+   * used to probe which plans exist. Infrastructure failures propagate.
    */
   public async getClonePlan(input: {
     accountId: string;
@@ -289,8 +294,12 @@ export class ProjectCloneService {
     let plan: ProjectClonePlanRow | undefined;
     try {
       plan = await this.options.lifecycle.getClonePlanById(planId);
-    } catch {
-      plan = undefined;
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        plan = undefined;
+      } else {
+        throw error;
+      }
     }
 
     const allowed =
@@ -312,7 +321,8 @@ export class ProjectCloneService {
 
   /**
    * Get clone provenance for a target Project, if any.
-   * Authorizes Project read first. Returns undefined when no clone exists.
+   * Authorizes Project read first. Returns undefined only when no clone exists;
+   * persistence failures propagate rather than becoming false absence.
    */
   public async getClonePlanByProjectId(input: {
     accountId: string;
@@ -330,10 +340,6 @@ export class ProjectCloneService {
       return undefined;
     }
 
-    try {
-      return await this.options.lifecycle.getClonePlanByTargetProjectId(projectId);
-    } catch {
-      return undefined;
-    }
+    return this.options.lifecycle.getClonePlanByTargetProjectId(projectId);
   }
 }

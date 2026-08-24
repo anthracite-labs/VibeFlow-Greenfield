@@ -52,7 +52,10 @@ describe("M-008 persistence authority boundary", () => {
 
   it("maps PostgreSQL unique/FK codes through drizzle-wrapped causes", () => {
     const unique = Object.assign(new Error("Failed query"), {
-      cause: Object.assign(new Error("duplicate key"), { code: "23505" }),
+      cause: Object.assign(new Error("duplicate key"), {
+        code: "23505",
+        constraint: "organization_memberships_org_account_uidx",
+      }),
     });
     expect(() => mapDatabaseError(unique)).toThrow(DuplicateMembershipError);
 

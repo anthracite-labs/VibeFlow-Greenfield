@@ -17,6 +17,7 @@
 
 import {
   isUuid,
+  NotFoundError,
   type ProjectRow,
   type ProjectRepository,
   type TenantRepository,
@@ -95,8 +96,6 @@ export class ProjectService {
     const organizationId = requireUuid("organizationId", input.organizationId);
     const name = requireNonEmpty("name", input.name);
 
-    // Authorization: creating a project requires membership in the target org.
-    // We authorize against the organization resource to prove tenant access.
     const decision = await this.options.authz.authorize({
       accountId,
       action: "create",
@@ -110,20 +109,18 @@ export class ProjectService {
       );
     }
 
-    // Ensure organization exists canonically (FK will also enforce).
     try {
       await this.options.tenants.getOrganizationById(organizationId);
-    } catch {
-      throw new ProjectNotFoundError(`Organization not found: ${organizationId}`);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new ProjectNotFoundError(`Organization not found: ${organizationId}`);
+      }
+      throw error;
     }
 
     return this.options.projects.createProject({ organizationId, name });
   }
 
-  /**
-   * Get a Project by canonical id. Same-tenant authorized access succeeds;
-   * cross-tenant, forged, revoked, unknown, and unauthenticated fail closed.
-   */
   public async getProject(input: GetProjectInput): Promise<ProjectRow> {
     const accountId = requireUuid("accountId", input.accountId);
     const projectId = requireUuid("projectId", input.projectId);
@@ -135,8 +132,6 @@ export class ProjectService {
     });
 
     if (!decision.allowed) {
-      // For unknown_resource we surface as not-found to avoid leaking,
-      // for no_membership as authorization error (both fail closed).
       if (decision.reason === "unknown_resource") {
         throw new ProjectNotFoundError(`Project not found: ${projectId}`);
       }
@@ -148,16 +143,14 @@ export class ProjectService {
 
     try {
       return await this.options.projects.getProjectById(projectId);
-    } catch {
-      throw new ProjectNotFoundError(`Project not found: ${projectId}`);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new ProjectNotFoundError(`Project not found: ${projectId}`);
+      }
+      throw error;
     }
   }
 
-  /**
-   * List Projects for a canonical Organization.
-   * Tenant-safe: only returns projects whose canonical organization matches
-   * and where caller is member of that organization.
-   */
   public async listProjects(input: ListProjectsInput): Promise<ProjectRow[]> {
     const accountId = requireUuid("accountId", input.accountId);
     const organizationId = requireUuid("organizationId", input.organizationId);
@@ -181,10 +174,6 @@ export class ProjectService {
     return this.options.projects.listProjectsForOrganization(organizationId);
   }
 
-  /**
-   * Update Project name. Tenant-safe mutation: requires membership in the
-   * Project's canonical Organization.
-   */
   public async updateProject(input: UpdateProjectInput): Promise<ProjectRow> {
     const accountId = requireUuid("accountId", input.accountId);
     const projectId = requireUuid("projectId", input.projectId);
@@ -208,8 +197,11 @@ export class ProjectService {
 
     try {
       return await this.options.projects.updateProject({ id: projectId, name });
-    } catch {
-      throw new ProjectNotFoundError(`Project not found: ${projectId}`);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new ProjectNotFoundError(`Project not found: ${projectId}`);
+      }
+      throw error;
     }
   }
 }

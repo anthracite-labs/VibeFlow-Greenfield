@@ -1,9 +1,11 @@
-# docs
+# Documentation
 
-Implementation-facing documentation and ADRs generated or approved by missions.
+This directory contains durable implementation notes and ADRs.
 
-This directory is **not** an authority for current mission status, build order, or scope. Use `.ai/ACTIVE_MISSION.md` for the current mission packet and `master-build-system/10_IMPLEMENTATION/MISSION_DAG.yaml` for authoritative mission status/dependencies.
+For current project state, read `../CHECKPOINT.md`.
+For permanent contributor rules, read `../AGENTS.md`.
+For authoritative mission status/dependencies, use `../master-build-system/10_IMPLEMENTATION/MISSION_DAG.yaml`.
 
-ADRs are retained historical decisions. Temporary planning/status documents should be removed once their durable rules have moved into authoritative contracts, code, or the mission DAG.
+Load deeper Master Build System material only when the task touches the authority it defines. Historical mission evidence is retained under `../evidence/` for verification/provenance, not as current implementation direction.
 
-Do not implement functionality here unless the active mission authorizes it.
+Temporary planning/status documents should not accumulate here. Move durable decisions into the appropriate authority/ADR and keep changing handoff state in `CHECKPOINT.md`.

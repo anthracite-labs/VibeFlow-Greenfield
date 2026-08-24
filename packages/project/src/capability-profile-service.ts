@@ -42,6 +42,8 @@ export interface ProjectCapabilityProfileResult {
   createdAt: Date | null;
 }
 
+const STABLE_READ_MAX_ATTEMPTS = 8;
+
 function requireUuid(name: string, value: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new ProjectInputError(name + " is required");
@@ -86,6 +88,33 @@ function requireCapabilityTokens(capabilities: readonly string[]): string[] {
 export class ProjectCapabilityProfileService {
   public constructor(private readonly options: ProjectCapabilityProfileServiceOptions) {}
 
+  /**
+   * Read one logically coherent capability profile without requiring a wider
+   * repository transaction API. The durable capability-profile version is
+   * monotonic, so version -> rows -> version is a seqlock: if both version
+   * reads agree, no replacement committed while the rows were being observed.
+   */
+  private async readStableProfile(projectId: string): Promise<ProjectCapabilityProfileResult> {
+    for (let attempt = 0; attempt < STABLE_READ_MAX_ATTEMPTS; attempt += 1) {
+      const versionBefore = await this.options.capabilities.getVersionByProjectId(projectId);
+      const rows = await this.options.capabilities.getCapabilitiesByProjectId(projectId);
+      const versionAfter = await this.options.capabilities.getVersionByProjectId(projectId);
+
+      if (versionBefore === versionAfter) {
+        return {
+          projectId,
+          capabilities: rows.map((row) => row.capabilityKey),
+          version: versionAfter,
+          createdAt: rows.length > 0 ? rows[0]!.createdAt : null,
+        };
+      }
+    }
+
+    throw new ProjectCapabilityProfileError(
+      "Capability profile changed continuously during read; retry the request",
+    );
+  }
+
   public async getProjectCapabilityProfile(
     input: GetProjectCapabilityProfileInput,
   ): Promise<ProjectCapabilityProfileResult> {
@@ -105,17 +134,7 @@ export class ProjectCapabilityProfileService {
       throw new ProjectCapabilityProfileError("Capability profile read denied: " + decision.reason);
     }
 
-    const rows = await this.options.capabilities.getCapabilitiesByProjectId(projectId);
-    const capabilities = rows.map((r) => r.capabilityKey);
-    const version = await this.options.capabilities.getVersionByProjectId(projectId);
-    const createdAt = rows.length > 0 ? rows[0]!.createdAt : null;
-
-    return {
-      projectId,
-      capabilities,
-      version,
-      createdAt,
-    };
+    return this.readStableProfile(projectId);
   }
 
   public async replaceProjectCapabilityProfile(
@@ -146,16 +165,15 @@ export class ProjectCapabilityProfileService {
         capabilities,
       });
 
-      const resultCapabilities = rows.map((r) => r.capabilityKey);
-      // Version is authoritative from the durable profile row, not from capability rows
-      const newVersion = await this.options.capabilities.getVersionByProjectId(projectId);
-      const createdAt = rows.length > 0 ? rows[0]!.createdAt : new Date();
-
+      // replaceCapabilities commits exactly one CAS transition from
+      // expectedVersion to expectedVersion + 1. Do not reread the durable
+      // version after commit: another writer may already have advanced it,
+      // which would pair this writer's rows with a different writer's token.
       return {
         projectId,
-        capabilities: resultCapabilities,
-        version: newVersion,
-        createdAt,
+        capabilities: rows.map((row) => row.capabilityKey),
+        version: expectedVersion + 1,
+        createdAt: rows.length > 0 ? rows[0]!.createdAt : null,
       };
     } catch (error) {
       if (error instanceof StaleVersionError) {

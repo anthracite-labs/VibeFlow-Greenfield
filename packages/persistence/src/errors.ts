@@ -14,6 +14,15 @@ export class DuplicateMembershipError extends PersistenceError {
   override readonly name = "DuplicateMembershipError";
 }
 
+/** A PostgreSQL uniqueness violation outside the membership-specific contract. */
+export class UniqueConstraintError extends PersistenceError {
+  override readonly name = "UniqueConstraintError";
+
+  public constructor(message: string, public readonly constraint?: string) {
+    super(message);
+  }
+}
+
 export class ForeignKeyViolationError extends PersistenceError {
   override readonly name = "ForeignKeyViolationError";
 }
@@ -79,14 +88,24 @@ interface PgLikeError {
   cause?: unknown;
 }
 
-function postgresErrorCode(error: unknown): string | undefined {
+interface PostgresErrorMetadata {
+  code: string;
+  constraint?: string;
+}
+
+function postgresErrorMetadata(error: unknown): PostgresErrorMetadata | undefined {
   let current: unknown = error;
   const seen = new Set<unknown>();
   while (current && typeof current === "object" && !seen.has(current)) {
     seen.add(current);
     const candidate = current as PgLikeError;
     if (typeof candidate.code === "string" && /^\d{5}$/.test(candidate.code)) {
-      return candidate.code;
+      return {
+        code: candidate.code,
+        ...(typeof candidate.constraint === "string"
+          ? { constraint: candidate.constraint }
+          : {}),
+      };
     }
     current = candidate.cause;
   }
@@ -94,11 +113,19 @@ function postgresErrorCode(error: unknown): string | undefined {
 }
 
 export function mapDatabaseError(error: unknown): never {
-  const code = postgresErrorCode(error);
-  if (code === "23505") {
-    throw new DuplicateMembershipError("organization membership already exists");
+  const metadata = postgresErrorMetadata(error);
+  if (metadata?.code === "23505") {
+    if (metadata.constraint === "organization_memberships_org_account_uidx") {
+      throw new DuplicateMembershipError("organization membership already exists");
+    }
+    throw new UniqueConstraintError(
+      metadata.constraint === undefined
+        ? "unique constraint violated"
+        : `unique constraint violated: ${metadata.constraint}`,
+      metadata.constraint,
+    );
   }
-  if (code === "23503") {
+  if (metadata?.code === "23503") {
     throw new ForeignKeyViolationError("referenced account or organization does not exist");
   }
   if (error instanceof PersistenceError) {

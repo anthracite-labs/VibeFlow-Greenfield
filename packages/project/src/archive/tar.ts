@@ -136,7 +136,10 @@ function verifyChecksum(buffer: Buffer, offset: number): void {
  *
  * GNU long-name (`L`) extensions are honoured so a long path is still
  * subjected to the full path policy rather than being silently truncated to
- * its 100-byte header field. PAX headers are skipped as metadata.
+ * its 100-byte header field. POSIX PAX extended/global headers are rejected
+ * until their complete effective-header semantics are implemented: a PAX
+ * `path`/`size` override cannot be ignored without creating a scanner/extractor
+ * interpretation split over the same accepted archive bytes.
  */
 export function readTarEntries(
   buffer: Buffer,
@@ -196,8 +199,17 @@ export function readTarEntries(
       continue;
     }
 
-    if (entryType === "gnu_long_link" || entryType === "pax_header") {
-      // Metadata-only records; they never become an imported entry.
+    if (entryType === "pax_header") {
+      throw new ArchiveRejectedError(
+        "unsupported_format",
+        "tar POSIX PAX extended/global headers are not accepted because their effective metadata overrides are not structurally reconciled",
+        name,
+      );
+    }
+
+    if (entryType === "gnu_long_link") {
+      // GNU long-link metadata applies only to link targets. Link entries are
+      // rejected by the scanner, so this record cannot alter an accepted file.
       offset = dataOffset + paddedSize;
       continue;
     }

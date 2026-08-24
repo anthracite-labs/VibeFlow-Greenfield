@@ -14,7 +14,7 @@
  *   import/clone leaves no partial Project/Artifact/Relation graph.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import type { ControlPlaneDatabase } from "./client.js";
 import {
@@ -475,10 +475,13 @@ export class ProjectLifecycleRepository {
 
     try {
       return await this.db.transaction(async (tx) => {
+        // PostgreSQL READ COMMITTED takes a fresh snapshot per statement. The
+        // clone reads Artifacts and relations separately, so explicitly pin a
+        // REPEATABLE READ snapshot before either query to prevent a torn graph.
+        await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`);
+
         const createdAt = now();
 
-        // Read the source graph inside the transaction so the clone is a
-        // consistent snapshot rather than a torn read.
         const sourceArtifacts = await tx
           .select()
           .from(artifacts)

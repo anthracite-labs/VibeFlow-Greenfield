@@ -30,6 +30,7 @@
 import {
   DuplicateIdempotentCommandError,
   isUuid,
+  NotFoundError,
   type ArchiveFormat,
   type ProjectArchiveImportEntryRow,
   type ProjectArchiveImportRow,
@@ -245,11 +246,26 @@ export class ProjectImportService {
     });
 
     // 6 & 7. Provenance is server-derived. Bytes go to private staging only,
-    // never into canonical Project/Artifact metadata rows.
+    // never into canonical Project/Artifact metadata rows. put() acquires one
+    // claim so a failed/replayed attempt can release its own retention without
+    // deleting a shared content-addressed blob retained by another import.
     let stagedBlobRef: string | undefined;
+    let stagedClaimHeld = false;
     if (this.options.staging !== undefined) {
       stagedBlobRef = await this.options.staging.put(input.archive);
+      stagedClaimHeld = true;
     }
+
+    const releaseStagedClaim = async (): Promise<void> => {
+      if (
+        stagedClaimHeld &&
+        stagedBlobRef !== undefined &&
+        this.options.staging !== undefined
+      ) {
+        stagedClaimHeld = false;
+        await this.options.staging.release(stagedBlobRef);
+      }
+    };
 
     // 8. One transaction: canonical Project + internal import provenance.
     try {
@@ -270,10 +286,17 @@ export class ProjectImportService {
           contentSha256: entry.contentSha256,
         })),
         stagedBlobRef,
-      idempotencyKey,
+        idempotencyKey,
       });
 
-      // 9. Canonical result.
+      // The repository can discover a concurrent winner in its own preflight.
+      // Our staging claim is not referenced by that winner's durable command.
+      if (applied.replayed) {
+        await releaseStagedClaim();
+      }
+
+      // 9. Canonical result. A non-replayed success deliberately retains the
+      // staging claim because the durable import row references stagedBlobRef.
       return {
         project: applied.project,
         import: applied.import,
@@ -281,6 +304,18 @@ export class ProjectImportService {
         replayed: applied.replayed,
       };
     } catch (error) {
+      // This attempt did not commit a durable row that owns its staging claim.
+      // Release it before resolving a concurrent idempotent winner or
+      // propagating the failure.
+      try {
+        await releaseStagedClaim();
+      } catch (releaseError) {
+        throw new AggregateError(
+          [error, releaseError],
+          "archive import failed and staged archive claim release also failed",
+        );
+      }
+
       // A concurrent retry of the same command raced us to the unique
       // idempotency key. Resolve to the winner's durable result instead of
       // reporting a spurious failure or creating a second Project.
@@ -311,7 +346,8 @@ export class ProjectImportService {
    * its canonical Project must be resolved to obtain an authorization scope.
    * That lookup reveals nothing to the caller: an unknown import id and an
    * unauthorized (foreign-tenant) import id produce the SAME opaque error, so
-   * this path cannot be used to probe which import ids exist.
+   * this path cannot be used to probe which import ids exist. Infrastructure
+   * failures are not normalized to absence.
    */
   public async getImportManifest(input: {
     accountId: string;
@@ -323,8 +359,12 @@ export class ProjectImportService {
     let importRow: ProjectArchiveImportRow | undefined;
     try {
       importRow = await this.options.lifecycle.getArchiveImportById(importId);
-    } catch {
-      importRow = undefined;
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        importRow = undefined;
+      } else {
+        throw error;
+      }
     }
 
     // Authorize against the canonical Project scope. M-014 registers no public
@@ -349,7 +389,8 @@ export class ProjectImportService {
 
   /**
    * Get import provenance for a Project, if any.
-   * Authorizes Project read first. Returns undefined when no import exists.
+   * Authorizes Project read first. Returns undefined only when no import exists;
+   * persistence failures propagate rather than becoming false absence.
    */
   public async getImportByProjectId(input: {
     accountId: string;
@@ -358,7 +399,6 @@ export class ProjectImportService {
     const accountId = requireUuid("accountId", input.accountId);
     const projectId = requireUuid("projectId", input.projectId);
 
-    // Authorize project read
     const decision = await this.options.authz.authorize({
       accountId,
       action: "read",
@@ -368,10 +408,6 @@ export class ProjectImportService {
       return undefined;
     }
 
-    try {
-      return await this.options.lifecycle.getArchiveImportByProjectId(projectId);
-    } catch {
-      return undefined;
-    }
+    return this.options.lifecycle.getArchiveImportByProjectId(projectId);
   }
 }

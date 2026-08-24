@@ -11,7 +11,7 @@ import {
   type ProjectRow,
   ArtifactRepository,
   ProjectCapabilityRepository,
-  ProjectLifecycleRepository,
+  ProjectOverviewRepository,
   ProjectProfileRepository,
   ProjectRepository,
   TenantRepository,
@@ -24,8 +24,6 @@ import { ArtifactService } from "./artifact-service.js";
 import { ProjectProfileService } from "./profile-service.js";
 import { ProjectCapabilityProfileService } from "./capability-profile-service.js";
 import { ProjectOverviewService } from "./overview-service.js";
-import { ProjectImportService } from "./import-service.js";
-import { ProjectCloneService } from "./clone-service.js";
 import { ProjectNotFoundError } from "./errors.js";
 
 const connectionString = process.env["VIBEFLOW_DATABASE_URL"] ?? process.env["DATABASE_URL"];
@@ -65,7 +63,7 @@ describePostgres("M-015 Project Overview service", () => {
     artifactsRepo = new ArtifactRepository(controlPlane.db);
     profilesRepo = new ProjectProfileRepository(controlPlane.db);
     capabilitiesRepo = new ProjectCapabilityRepository(controlPlane.db);
-    const lifecycleRepo = new ProjectLifecycleRepository(controlPlane.db);
+    const overviewRepo = new ProjectOverviewRepository(controlPlane.db);
     audit = new AuditService(controlPlane.pool);
 
     const combined = {
@@ -73,7 +71,7 @@ describePostgres("M-015 Project Overview service", () => {
       getMembership: tenants.getMembership.bind(tenants),
       getProjectById: projectsRepo.getProjectById.bind(projectsRepo),
       getArtifactById: artifactsRepo.getArtifactById.bind(artifactsRepo),
-      getArtifactRelationById: async () => { throw new Error("not needed"); },
+      getArtifactRelationById: artifactsRepo.getArtifactRelationById.bind(artifactsRepo),
     };
 
     authz = new TenantAuthorizationService(combined, audit);
@@ -81,17 +79,7 @@ describePostgres("M-015 Project Overview service", () => {
     artifactService = new ArtifactService({ artifacts: artifactsRepo, authz });
     profileService = new ProjectProfileService({ profiles: profilesRepo, artifacts: artifactsRepo, authz });
     capService = new ProjectCapabilityProfileService({ capabilities: capabilitiesRepo, authz });
-    const importService = new ProjectImportService({ lifecycle: lifecycleRepo, authz });
-    const cloneService = new ProjectCloneService({ projects: projectsRepo, lifecycle: lifecycleRepo, authz });
-    overviewService = new ProjectOverviewService({
-      projectService,
-      projectProfileService: profileService,
-      projectCapabilityProfileService: capService,
-      artifactService,
-      importService,
-      cloneService,
-      authz,
-    });
+    overviewService = new ProjectOverviewService({ overview: overviewRepo, authz });
 
     alice = await tenants.createAccount({ displayName: "Overview Alice" });
     bob = await tenants.createAccount({ displayName: "Overview Bob" });
@@ -119,6 +107,55 @@ describePostgres("M-015 Project Overview service", () => {
     expect(overview.capabilityProfile.version).toBe(0);
     expect(overview.artifacts).toEqual([]);
     expect(overview.artifactRelations).toEqual([]);
+  });
+
+  it("returns populated profile, capability and artifact graph from the snapshot repository", async () => {
+    const populated = await projectService.createProject({
+      accountId: alice.id,
+      organizationId: orgA.id,
+      name: "Populated Overview Project",
+    });
+    const subject = await artifactService.createArtifact({
+      accountId: alice.id,
+      projectId: populated.id,
+      type: "test/subject",
+    });
+    const object = await artifactService.createArtifact({
+      accountId: alice.id,
+      projectId: populated.id,
+      type: "test/object",
+    });
+    const relation = await artifactService.createArtifactRelation({
+      accountId: alice.id,
+      subjectArtifactId: subject.id,
+      objectArtifactId: object.id,
+      relationKind: "contains",
+    });
+    await profileService.updateProjectProfile({
+      accountId: alice.id,
+      projectId: populated.id,
+      expectedVersion: 0,
+      description: "snapshot profile",
+      coverArtifactId: subject.id,
+    });
+    await capService.replaceProjectCapabilityProfile({
+      accountId: alice.id,
+      projectId: populated.id,
+      expectedVersion: 0,
+      capabilities: ["runtime/node", "artifact/web"],
+    });
+
+    const overview = await overviewService.getProjectOverview({
+      accountId: alice.id,
+      projectId: populated.id,
+    });
+
+    expect(overview.profile.description).toBe("snapshot profile");
+    expect(overview.profile.coverArtifactId).toBe(subject.id);
+    expect(overview.capabilityProfile.version).toBe(1);
+    expect(overview.capabilityProfile.capabilities).toEqual(["artifact/web", "runtime/node"]);
+    expect(overview.artifacts.map((row) => row.id).sort()).toEqual([object.id, subject.id].sort());
+    expect(overview.artifactRelations.map((row) => row.id)).toContain(relation.id);
   });
 
   it("cross-tenant overview denied", async () => {

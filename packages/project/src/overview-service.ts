@@ -2,37 +2,28 @@
  * M-015 Project Overview / E2E read model.
  *
  * Tenant-safe Project-domain aggregate suitable for the FE-002
- * "Project Overview" read contract. Returns a server-derived projection
- * of currently available canonical Project-domain state.
+ * "Project Overview" read contract. Returns a server-derived projection from
+ * one PostgreSQL REPEATABLE READ snapshot.
  *
  * This is a read model / projection, NOT a canonical resource.
  * No provider bindings, Task/Execution/Release are fabricated here.
  */
 
-import { isUuid } from "@vibeflow/persistence";
-import type { ArtifactRelationRow, ArtifactRow } from "@vibeflow/persistence";
+import {
+  isUuid,
+  NotFoundError,
+  ProjectOverviewRepository,
+  type ArtifactRelationRow,
+  type ArtifactRow,
+  type ProjectOverviewSnapshot,
+} from "@vibeflow/persistence";
 import { TenantAuthorizationService } from "@vibeflow/authorization";
-import { ProjectService } from "./service.js";
-import {
-  ProjectProfileService,
-  type ProjectProfileResult,
-} from "./profile-service.js";
-import {
-  ProjectCapabilityProfileService,
-  type ProjectCapabilityProfileResult,
-} from "./capability-profile-service.js";
+import type { ProjectProfileResult } from "./profile-service.js";
+import type { ProjectCapabilityProfileResult } from "./capability-profile-service.js";
 import { ProjectNotFoundError, ProjectOverviewError } from "./errors.js";
-import { ArtifactService } from "./artifact-service.js";
-import { ProjectImportService } from "./import-service.js";
-import { ProjectCloneService } from "./clone-service.js";
 
 export interface ProjectOverviewServiceOptions {
-  projectService: ProjectService;
-  projectProfileService: ProjectProfileService;
-  projectCapabilityProfileService: ProjectCapabilityProfileService;
-  artifactService: ArtifactService;
-  importService: ProjectImportService;
-  cloneService: ProjectCloneService;
+  overview: ProjectOverviewRepository;
   authz: TenantAuthorizationService;
 }
 
@@ -67,7 +58,7 @@ export interface ProjectOverview {
   profile: ProjectProfileResult;
   capabilityProfile: ProjectCapabilityProfileResult;
   artifacts: ArtifactRow[];
-   artifactRelations: ArtifactRelationRow[];
+  artifactRelations: ArtifactRelationRow[];
   importProvenance: ImportProvenance | null;
   cloneProvenance: CloneProvenance | null;
 }
@@ -104,57 +95,76 @@ export class ProjectOverviewService {
       throw new ProjectOverviewError("Project overview denied: " + decision.reason);
     }
 
-    const project = await this.options.projectService.getProject({ accountId, projectId });
-    const profile = await this.options.projectProfileService.getProjectProfile({ accountId, projectId });
-    const capabilityProfile = await this.options.projectCapabilityProfileService.getProjectCapabilityProfile({ accountId, projectId });
-    const artifacts = await this.options.artifactService.listArtifacts({ accountId, projectId });
-    const artifactRelations = await this.options.artifactService.listArtifactRelations({ accountId, projectId });
-
-    // Import provenance
-    let importProvenance: ImportProvenance | null = null;
+    let snapshot: ProjectOverviewSnapshot;
     try {
-      const imp = await this.options.importService.getImportByProjectId({ accountId, projectId });
-      if (imp) {
-        importProvenance = {
-          importId: imp.id,
-          archiveFormat: imp.archiveFormat,
-          archiveSha256: imp.archiveSha256,
-          archiveByteSize: imp.archiveByteSize,
-          importedAt: imp.createdAt,
-        };
+      snapshot = await this.options.overview.getSnapshot(projectId);
+    } catch (error) {
+      if (error instanceof NotFoundError) {
+        throw new ProjectNotFoundError("Project not found: " + projectId);
       }
-    } catch {
-      // No import provenance
+      // Infrastructure/query failures are not valid empty Project state.
+      throw error;
     }
 
-    // Clone provenance
-    let cloneProvenance: CloneProvenance | null = null;
-    try {
-      const plan = await this.options.cloneService.getClonePlanByProjectId({ accountId, projectId });
-      if (plan) {
-        cloneProvenance = {
-          clonePlanId: plan.id,
-          sourceProjectId: plan.sourceProjectId,
-          targetProjectId: plan.targetProjectId,
-          clonedAt: plan.createdAt,
+    const profile: ProjectProfileResult = snapshot.profile
+      ? {
+          projectId: snapshot.profile.projectId,
+          description: snapshot.profile.description,
+          coverArtifactId: snapshot.profile.coverArtifactId,
+          version: snapshot.profile.version,
+          createdAt: snapshot.profile.createdAt,
+          updatedAt: snapshot.profile.updatedAt,
+        }
+      : {
+          projectId,
+          description: null,
+          coverArtifactId: null,
+          version: 0,
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
         };
-      }
-    } catch {
-      // No clone provenance
-    }
+
+    const capabilityProfile: ProjectCapabilityProfileResult = {
+      projectId,
+      capabilities: snapshot.capabilities.map((row) => row.capabilityKey),
+      version: snapshot.capabilityProfileVersion,
+      createdAt:
+        snapshot.capabilities.length > 0
+          ? snapshot.capabilities[0]!.createdAt
+          : null,
+    };
+
+    const importProvenance: ImportProvenance | null = snapshot.importProvenance
+      ? {
+          importId: snapshot.importProvenance.id,
+          archiveFormat: snapshot.importProvenance.archiveFormat,
+          archiveSha256: snapshot.importProvenance.archiveSha256,
+          archiveByteSize: snapshot.importProvenance.archiveByteSize,
+          importedAt: snapshot.importProvenance.createdAt,
+        }
+      : null;
+
+    const cloneProvenance: CloneProvenance | null = snapshot.cloneProvenance
+      ? {
+          clonePlanId: snapshot.cloneProvenance.id,
+          sourceProjectId: snapshot.cloneProvenance.sourceProjectId,
+          targetProjectId: snapshot.cloneProvenance.targetProjectId,
+          clonedAt: snapshot.cloneProvenance.createdAt,
+        }
+      : null;
 
     return {
       project: {
-        id: project.id,
-        organizationId: project.organizationId,
-        name: project.name,
-        createdAt: project.createdAt,
-        updatedAt: project.updatedAt,
+        id: snapshot.project.id,
+        organizationId: snapshot.project.organizationId,
+        name: snapshot.project.name,
+        createdAt: snapshot.project.createdAt,
+        updatedAt: snapshot.project.updatedAt,
       },
       profile,
       capabilityProfile,
-      artifacts,
-      artifactRelations,
+      artifacts: [...snapshot.artifacts],
+      artifactRelations: [...snapshot.artifactRelations],
       importProvenance,
       cloneProvenance,
     };

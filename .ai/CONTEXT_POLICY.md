@@ -1,3 +1,3 @@
 # AI Context Policy
 
-Do not recursively load the repository or master build system into a coding model. Use `.ai/INDEX.yaml`, `.ai/ACTIVE_MISSION.md`, and the current mission packet to assemble only relevant truth. `master-build-system/99_REFERENCE/` is excluded from coding context unless the mission is explicitly architecture/research work.
+Use progressive disclosure. Start with `AGENTS.md` and `CHECKPOINT.md`, inspect relevant code/tests, then load only the exact authority or historical evidence required by the task. Do not recursively preload the repository, full Master Build System, or `evidence/` into model context.

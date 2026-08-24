@@ -6,7 +6,6 @@ These assert the M-015 authority contract as source-level invariants.
 
 from __future__ import annotations
 
-import json
 import re
 import unittest
 from pathlib import Path
@@ -14,9 +13,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 MIGRATION = ROOT / "migrations/0007_project_lifecycle.sql"
-PERSISTENCE_SCHEMA = ROOT / "packages/persistence/src/schema.ts"
+RESIDUAL_MIGRATION = ROOT / "migrations/0009_audit_residual_integrity.sql"
 PERSISTENCE_INDEX = ROOT / "packages/persistence/src/index.ts"
 REPOSITORIES = ROOT / "packages/persistence/src/repositories.ts"
+CAPABILITY_REPOSITORY = ROOT / "packages/persistence/src/capability-repository.ts"
+OVERVIEW_REPOSITORY = ROOT / "packages/persistence/src/overview-repository.ts"
 IDS = ROOT / "packages/persistence/src/ids.ts"
 ERRORS = ROOT / "packages/persistence/src/errors.ts"
 
@@ -26,11 +27,8 @@ OVERVIEW_SERVICE = ROOT / "packages/project/src/overview-service.ts"
 PROJECT_INDEX = ROOT / "packages/project/src/index.ts"
 PROJECT_ERRORS = ROOT / "packages/project/src/errors.ts"
 
-CANONICAL_RESOURCES = ROOT / "master-build-system/02_ARCHITECTURE/CANONICAL_RESOURCE_MODEL.yaml"
 EVENT_CATALOG = ROOT / "master-build-system/03_BACKEND/EVENT_CATALOG.yaml"
 STATE_MACHINES = ROOT / "master-build-system/03_BACKEND/STATE_MACHINES.yaml"
-CAPABILITY_CSV = ROOT / "master-build-system/01_PRODUCT/VIBEFLOW_CAPABILITY_LEDGER.csv"
-CAPABILITY_YAML = ROOT / "master-build-system/01_PRODUCT/VIBEFLOW_CAPABILITY_LEDGER.yaml"
 AUTHZ_TYPES = ROOT / "packages/authorization/src/types.ts"
 
 
@@ -40,33 +38,56 @@ class M015AuthorityContract(unittest.TestCase):
     def test_no_new_canonical_resource_type_in_authz(self):
         """M-015 must not register new authorization resource types."""
         authz_content = AUTHZ_TYPES.read_text()
-        resource_types = re.findall(r'"([a-z_]+)"', authz_content.split("RESOURCE_TYPES")[1].split("]")[0])
+        resource_types = re.findall(
+            r'"([a-z_]+)"',
+            authz_content.split("RESOURCE_TYPES")[1].split("]")[0],
+        )
         known = {"organization", "project", "artifact", "artifact_relation"}
-        for rt in resource_types:
-            if rt not in known:
-                self.fail(f"Unknown resource type found: {rt}")
+        for resource_type in resource_types:
+            if resource_type not in known:
+                self.fail(f"Unknown resource type found: {resource_type}")
 
     def test_no_new_profile_canonical_resource_type(self):
         """ProjectProfile and ProjectCapabilityProfile must not appear as authz resource types."""
         authz_content = AUTHZ_TYPES.read_text()
-        for invented in ("project_profile", "project_capability_profile", "project_overview", "profile", "capability"):
+        for invented in (
+            "project_profile",
+            "project_capability_profile",
+            "project_overview",
+            "profile",
+            "capability",
+        ):
             if invented in authz_content:
                 self.fail(f"M-015 must not register '{invented}' as authz resource type")
 
-    def test_event_catalog_unchanged(self):
-        """M-015 must not add events for profile, capability, or lifecycle."""
+    def test_event_catalog_has_no_m015_project_profile_events(self):
+        """M-015 must not invent Project profile/capability/overview event families."""
         event_content = EVENT_CATALOG.read_text()
-        for invented in ("profile", "capability", "overview"):
-            if f".{invented}" in event_content or f"_{invented}" in event_content:
-                # Only flag if it looks like an event name
-                pass  # Too broad to check automatically; manual review
+        event_names = re.findall(r"(?m)^  name:\s*([^\s#]+)\s*$", event_content)
+        self.assertGreater(len(event_names), 0, "event catalog parser found no event names")
+        forbidden_prefixes = (
+            "project.profile",
+            "project.capability",
+            "project.overview",
+            "project.lifecycle",
+            "profile.",
+            "capability_profile.",
+            "project_profile.",
+        )
+        for event_name in event_names:
+            lowered = event_name.lower()
+            self.assertFalse(
+                any(lowered.startswith(prefix) for prefix in forbidden_prefixes),
+                f"M-015 must not invent Project profile/lifecycle event: {event_name}",
+            )
 
-    def test_state_machines_unchanged(self):
-        """M-015 must not add project lifecycle states."""
+    def test_state_machines_have_no_project_lifecycle_machine(self):
+        """M-015 must not add a Project/Profile/Capability state machine."""
         sm_content = STATE_MACHINES.read_text()
-        for invented in ("ACTIVE", "ARCHIVED", "DELETED", "profile", "capability"):
-            if invented.lower() in sm_content.lower():
-                pass  # Manual review; STATE_MACHINES may mention these in comments
+        machine_names = re.findall(r"(?m)^  ([A-Za-z][A-Za-z0-9]*):\s*$", sm_content)
+        self.assertGreater(len(machine_names), 0, "state-machine parser found no machines")
+        for invented in ("Project", "ProjectProfile", "ProjectCapabilityProfile", "ProjectOverview"):
+            self.assertNotIn(invented, machine_names)
 
     def test_migration_has_project_profiles_table(self):
         """Migration must create project_profiles."""
@@ -100,7 +121,7 @@ class M015AuthorityContract(unittest.TestCase):
         """Capability key regex must be open-ended, not a closed enum."""
         ids_content = IDS.read_text()
         self.assertIn("CAPABILITY_KEY_RE", ids_content)
-        self.assertIn("/", ids_content)  # Must use separator
+        self.assertIn("/", ids_content)
 
     def test_stale_version_error_exists(self):
         """StaleVersionError must exist in errors."""
@@ -124,35 +145,77 @@ class M015AuthorityContract(unittest.TestCase):
     def test_profile_service_authz_ordering(self):
         """Profile service must authorize before loading cover artifact."""
         service_content = PROFILE_SERVICE.read_text()
-        self.assertIn("authorize", service_content)
-        self.assertIn("getArtifactById", service_content)
+        self.assertLess(service_content.index("action: \"update\""), service_content.index("getArtifactById"))
 
     def test_capability_profile_replace_atomic(self):
-        """Replace must be atomic (one transaction)."""
-        repo_content = REPOSITORIES.read_text()
+        """The exported capability repository must replace in one transaction."""
+        repo_content = CAPABILITY_REPOSITORY.read_text()
+        index_content = PERSISTENCE_INDEX.read_text()
+        self.assertIn("ProjectCapabilityRepository", index_content)
+        self.assertIn('from "./capability-repository.js"', index_content)
         self.assertIn("replaceCapabilities", repo_content)
         self.assertIn("transaction", repo_content)
+        self.assertIn("FOR UPDATE", repo_content)
+
+    def test_capability_profile_has_independent_durable_epoch(self):
+        """Capability state must not manufacture or depend on ProjectProfile state."""
+        migration_content = RESIDUAL_MIGRATION.read_text()
+        repo_content = CAPABILITY_REPOSITORY.read_text()
+        self.assertIn("CREATE TABLE project_capability_profiles", migration_content)
+        self.assertIn("project_capabilities_profile_version_fk", migration_content)
+        self.assertIn("project_profiles_version_positive", migration_content)
+        self.assertIn("INSERT INTO project_capability_profiles", repo_content)
+        self.assertNotIn("INSERT INTO project_profiles", repo_content)
+        self.assertNotIn("projectProfiles", repo_content)
+
+    def test_capability_profile_read_guards_against_torn_version(self):
+        """Capability rows and optimistic-concurrency token must describe one version."""
+        service_content = CAP_PROFILE_SERVICE.read_text()
+        self.assertIn("versionBefore", service_content)
+        self.assertIn("versionAfter", service_content)
+        self.assertIn("versionBefore === versionAfter", service_content)
+        self.assertIn("version: expectedVersion + 1", service_content)
+
+    def test_overview_is_read_from_one_repeatable_read_snapshot(self):
+        """ProjectOverview must not fan out across independent DB snapshots."""
+        repository_content = OVERVIEW_REPOSITORY.read_text()
+        service_content = OVERVIEW_SERVICE.read_text()
+        self.assertIn("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", repository_content)
+        self.assertIn("ProjectOverviewRepository", service_content)
+        self.assertIn("project_capability_profiles", repository_content)
+        self.assertIn("snapshot.capabilityProfileVersion", service_content)
+        self.assertNotIn("catch {", service_content)
+
+    def test_persistence_index_exports_overview_snapshot_repository(self):
+        index_content = PERSISTENCE_INDEX.read_text()
+        self.assertIn("ProjectOverviewRepository", index_content)
 
     def test_no_provider_fields_in_migration(self):
         """No provider/external identifier columns in new tables."""
         sql = MIGRATION.read_text()
-        for field in ("provider_id", "external_id", "repository_id", "workspace_id", "credential", "secret"):
-            # Check only in the CREATE TABLE / CONSTRAINT portions, not comments
+        for field in (
+            "provider_id",
+            "external_id",
+            "repository_id",
+            "workspace_id",
+            "credential",
+            "secret",
+        ):
             table_portion = sql[sql.index("CREATE TABLE"):]
             self.assertNotIn(field, table_portion.lower())
 
     def test_no_provider_fields_in_repositories(self):
-        """Repository rejects provider authority fields."""
+        """Repositories reject provider authority fields."""
         repo_content = REPOSITORIES.read_text()
+        capability_repo_content = CAPABILITY_REPOSITORY.read_text()
         self.assertIn("rejectProviderAuthority", repo_content)
+        self.assertIn("rejectProviderAuthority", capability_repo_content)
 
     def test_capability_key_validation_rejects_malformed(self):
         """Capability key validator must reject common malformed tokens."""
         ids_content = IDS.read_text()
         self.assertIn("CAPABILITY_KEY_RE", ids_content)
-        # Should reject single segment
         self.assertIn("two or more", ids_content)
-        # Should reject control characters
         self.assertIn("[a-z]", ids_content)
 
 

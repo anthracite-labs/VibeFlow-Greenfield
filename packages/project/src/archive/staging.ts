@@ -26,13 +26,21 @@ export type StagedArchiveRef = string;
 
 export interface ArchiveStagingPort {
   /**
-   * Stage archive bytes under their content address and return the opaque
-   * reference. Staging the same bytes twice is idempotent.
+   * Stage archive bytes under their content address, acquire one reference
+   * claim for the caller, and return the opaque reference. The content write is
+   * idempotent; repeated puts of identical bytes share one blob while holding
+   * independent claims.
    */
   put(bytes: Buffer): Promise<StagedArchiveRef>;
   /** Read staged bytes back, or `undefined` when the ref is unknown. */
   get(ref: StagedArchiveRef): Promise<Buffer | undefined>;
-  /** Remove staged bytes. Removing an unknown ref is a no-op. */
+  /**
+   * Release one caller claim. The bytes are deleted only when the final claim
+   * is released, so a failed import cannot delete content retained by another
+   * successful import of the same archive.
+   */
+  release(ref: StagedArchiveRef): Promise<void>;
+  /** Administrative/test force-delete. Removing an unknown ref is a no-op. */
   delete(ref: StagedArchiveRef): Promise<void>;
 }
 
@@ -50,12 +58,14 @@ export function stagedArchiveRefFor(bytes: Buffer): StagedArchiveRef {
  */
 export class InMemoryArchiveStaging implements ArchiveStagingPort {
   private readonly blobs = new Map<StagedArchiveRef, Buffer>();
+  private readonly claims = new Map<StagedArchiveRef, number>();
 
   public async put(bytes: Buffer): Promise<StagedArchiveRef> {
     const ref = stagedArchiveRefFor(bytes);
     if (!this.blobs.has(ref)) {
       this.blobs.set(ref, Buffer.from(bytes));
     }
+    this.claims.set(ref, (this.claims.get(ref) ?? 0) + 1);
     return ref;
   }
 
@@ -64,12 +74,31 @@ export class InMemoryArchiveStaging implements ArchiveStagingPort {
     return stored === undefined ? undefined : Buffer.from(stored);
   }
 
+  public async release(ref: StagedArchiveRef): Promise<void> {
+    const current = this.claims.get(ref);
+    if (current === undefined) {
+      return;
+    }
+    if (current <= 1) {
+      this.claims.delete(ref);
+      this.blobs.delete(ref);
+      return;
+    }
+    this.claims.set(ref, current - 1);
+  }
+
   public async delete(ref: StagedArchiveRef): Promise<void> {
+    this.claims.delete(ref);
     this.blobs.delete(ref);
   }
 
   /** Test/diagnostic helper: how many distinct blobs are currently staged. */
   public get size(): number {
     return this.blobs.size;
+  }
+
+  /** Test/diagnostic helper: number of retained claims for one staged blob. */
+  public claimCount(ref: StagedArchiveRef): number {
+    return this.claims.get(ref) ?? 0;
   }
 }

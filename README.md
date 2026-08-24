@@ -1,47 +1,71 @@
 # VibeFlow
 
-VibeFlow is an open, mobile-first control, policy, recovery, and verification layer for agentic software development.
+VibeFlow is a mobile-first control, policy, durability, recovery, and independent-verification layer for agentic software development. It coordinates independently owned agents, model providers, workspaces, repositories, tools/data connections, and deployment providers without requiring one provider to own the full stack.
 
-This repository builds from the **VibeFlow Greenfield Master Build System v1.0**. The build system is the authoritative product/architecture/implementation contract. Replit research is retained only as clean-room capability evidence; it is not source code or an implementation input.
+The phone is a control, approval, and inspection surface. It is not the execution owner.
 
 ## Start here
 
-Human or AI contributor:
-1. Read `AGENTS.md`.
-2. Read `master-build-system/00_MASTER/MASTER_OF_MASTERS.md`.
-3. Read `.ai/ACTIVE_MISSION.md`.
-4. Load only the mission-specific context required by the active mission and `.ai/INDEX.yaml`.
-5. Work on a branch and open a PR. Never silently widen scope.
+For development:
 
-## Mission state
+1. Read `AGENTS.md`.
+2. Read `CHECKPOINT.md`.
+3. Inspect the code and tests relevant to the requested change.
+4. Load Master Build System files only when the task touches the authority they define.
+
+Do not use historical evidence as current project status. `CHECKPOINT.md` is the current handoff; `master-build-system/10_IMPLEMENTATION/MISSION_DAG.yaml` remains authoritative for mission status and dependencies.
+
+## Current mission pointer
+
+Active/reviewable mission: **M-015**. This single pointer is retained because repository integrity validation requires the human-facing README to name the mission selected by the authoritative DAG. Current implementation/validation state belongs in `CHECKPOINT.md`, not here.
 
 The current authoritative active/reviewable mission is **M-016**. This pointer exists because retained integrity validation requires human-facing entry points to name the mission selected by the DAG; do not infer broader status or acceptance from this README.
+Update this pointer only in the same change that advances the authoritative mission state and checkpoint.
 
-- Current mission packet: `.ai/ACTIVE_MISSION.md`
-- Authoritative mission status/dependencies: `master-build-system/10_IMPLEMENTATION/MISSION_DAG.yaml`
-- Human-readable mission register: `master-build-system/10_IMPLEMENTATION/MISSION_REGISTER.csv`
-- Historical acceptance evidence: `evidence/missions/`
+## Stack
 
 Update the M-016 pointer in this README only in the same mission-progression change that updates the authoritative DAG. If a historical document or evidence file disagrees with current mission authority, the Master Build System and mission DAG win.
+- Node.js 24
+- pnpm 11.4.0
+- TypeScript 6
+- Turborepo
+- Vitest
+- Python 3 stdlib validation/integration harnesses
+- PostgreSQL-backed live integration paths where required by a mission
 
 ## Repository map
 
-- `master-build-system/` — authoritative product, architecture, security, mission, and verification contracts.
-- `packages/` — shared product/domain packages, including contract-tested seed surfaces for later missions.
-- `apps/`, `services/`, `workers/`, `adapters/` — mission-owned implementation surfaces; placeholders are retained intentionally until their missions activate.
-- `migrations/` — durable persistence migrations introduced by accepted missions.
-- `evidence/` — retained historical acceptance and verification evidence; not live implementation direction.
-- `reference/oss-harvest/` — clean-room implementation-reference evidence governed by the harvest policy.
-- `docs/` — implementation-facing documentation and ADRs; not mission-status authority except the validator-required mission pointer file.
-- `scripts/`, `tests/`, `security/`, `infrastructure/` — retained repository, verification, security, and environment tooling.
+- `packages/` — shared product/domain packages and canonical implementation surfaces
+- `apps/`, `services/`, `workers/`, `adapters/` — application/provider surfaces activated by missions
+- `migrations/` — durable persistence migrations
+- `scripts/`, `tests/` — validation, contract, integration, and repository tooling
+- `infrastructure/`, `security/` — development/security policy and supporting configuration
+- `master-build-system/` — retained authoritative product/architecture/security/mission contracts used by validators and code generation
+- `evidence/` — retained mission acceptance evidence; historical, not current work direction
+- `reference/` — clean-room implementation-reference evidence
+- `docs/` — durable implementation notes and ADRs
 
-## Contracts
-
-`packages/contracts` publishes the canonical contract catalog — resource names, state machines and event catalog metadata — generated from the Master Build System. Generated files are derived artifacts marked DO NOT EDIT.
+## Install
 
 ```bash
-pnpm run contracts:generate   # regenerate from master authority
-pnpm run contracts:check      # fail on missing/stale/unexpected generated output
+corepack enable
+pnpm install --frozen-lockfile
 ```
 
-Command/event payload schemas, REST payloads, persistence schemas and error codes are introduced only when an authoritative domain mission defines them. See `packages/contracts/README.md`.
+## Validate
+
+```bash
+pnpm run typecheck
+pnpm run test
+pnpm run build
+pnpm run contracts:check
+pnpm run check
+```
+
+Some integration checks require PostgreSQL and `DATABASE_URL`; a skipped live test is not equivalent to a verified pass.
+
+## AI contributors
+
+Keep permanent operating rules in `AGENTS.md` and current project state in `CHECKPOINT.md`. Do not create provider-specific instruction files or duplicate status documents unless a tool requires a compatibility pointer.
+
+The repository is the canonical working tree. Keep changes reviewable and leave it in a state the next developer or agent can continue from immediately.
